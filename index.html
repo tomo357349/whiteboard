@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport"
+		content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no" />
+	<meta name="apple-mobile-web-app-capable" content="yes" />
+	<meta name="apple-touch-fullscreen" content="yes" />
+	<meta name="msapplication-tap-highlight" content="no" />
+	<link rel="stylesheet" href="assets/css/style.css" />
+	<link rel="icon" href="assets/favicon.ico" type="image/x-icon" />
+	<link rel="shortcut icon" href="assets/favicon.ico" />
+	<script src="assets/js/jquery.js"></script>
+	<script src="assets/js/paper.js"></script>
+	<title>Whiteboard</title>
+	<script>
+		$.extend($.fn, {
+			orNull: function () {
+				return this.length > 0 ? this : null;
+			},
+
+			findAndSelf: function (selector) {
+				return this.find(selector).add(this.filter(selector));
+			}
+		});
+
+		var colors = ['black', 'red', 'blue', 'green'];
+		var widths = [1, 3, 5, 9];
+		var color = colors[0];
+		var width = widths[0];
+		var fontsize = 16;
+		var draws = [];
+		var redos = [];
+		var path;
+		// var textItem;
+		var zoomtool;
+
+		function getFontSize() {
+			return Math.floor(fontsize * Math.sqrt(width));
+		}
+
+		function initializePaper() {
+			draws = [];
+			paper.project.clear();
+			paper.project.currentStyle = {
+				strokeJoin: 'round',
+				strokeCap: 'round'
+			};
+			// textItem = new paper.PointText({
+			// 	content: 'Click and drag to draw a line.',
+			// 	point: new paper.Point(20, 30),
+			// 	fillColor: 'black',
+			// });
+		}
+
+		function zoom(delta, point) {
+			if (!delta) return;
+
+			var
+				oldZoom = paper.view.zoom,
+				oldCenter = paper.view.center,
+				viewPos = paper.view.viewToProject(point);
+			newZoom = delta > 0 ? oldZoom * 1.05 : oldZoom / 1.05;
+			if (newZoom < .2) newZoom = .2;
+			if (newZoom > 5) newZoom = 5;
+
+			if (!this.allowedZoom(newZoom)) return;
+
+			var
+				zoomScale = oldZoom / newZoom,
+				centerAdjust = viewPos.subtract(oldCenter),
+				offset = viewPos.subtract(centerAdjust.multiply(zoomScale)).subtract(oldCenter);
+
+			paper.view.center = view.center.add(offset);
+		}
+
+		function allowedZoom(rate) {
+			rate = Math.max(rate, this.settings.minZoom);
+			rate = Math.min(rate, this.settings.maxZoom);
+
+			if (rate !== paper.view.zoom) {
+				paper.view.zoom = rate;
+				return rate;
+			}
+			return null;
+		}
+
+		function exportDraws() {
+			return draws.map(function (draw) {
+				return {
+					time: draw.time,
+					type: draw.type,
+					data: draw.data.exportJSON()
+				};
+			});
+		}
+
+		function importDraws(json, replay) {
+			json.forEach(function (o) {
+				var millis = o.time - json[0].time;
+				replay ? setTimeout(function () {
+					drawItem(o.data, o.type);
+				}, millis) : drawItem(o.data, o.type);
+			});
+		}
+
+		function drawItem(json, type) {
+			var item = (type === 'Path' || type === 'Line') ? new paper.Path() 
+			: (type === 'Text') ? new paper.PointText() 
+			: (type === 'Rect') ? new paper.Shape.Rectangle() 
+			: new paper.Raster();
+			item.importJSON(json);
+			draws.push({
+				time: new Date().getTime(),
+				type: type,
+				data: item
+			});
+		}
+
+		function undoDraw() {
+			if (!draws.length) return;
+			var item = draws.pop();
+			redos.push({
+				type: item.type,
+				data: item.data.exportJSON()
+			});
+			paper.project.activeLayer.lastChild.remove();
+		}
+
+		function redoDraw() {
+			if (!redos.length) return;
+			var item = redos.pop();
+			drawItem(item.data, item.type);
+		}
+
+		function PinchHook(el) {
+			var me = this;
+			var eventCache = [];
+			var prevDiff = -1;
+			el.onpointerdown = function (event) {
+				eventCache.push(event);
+				if (eventCache.length == 2) {
+					event.preventDefault();
+					event.stopPropagation();
+				}
+			};
+			el.onpointermove = function (event) {
+				for (var i = 0; i < eventCache.length; i++) {
+					if (event.pointerId == eventCache[i].pointerId) {
+						eventCache[i] = event;
+						break;
+					}
+				}
+
+				// If two pointers are down, check for pinch gestures
+				if (eventCache.length == 2) {
+					event.preventDefault();
+					event.stopPropagation();
+					// Calculate the distance between the two pointers
+					var curDiff = Math.abs(eventCache[0].clientX - eventCache[1].clientX);
+
+					if (prevDiff > 0) {
+						if (curDiff > prevDiff) {
+							// The distance between the two pointers has increased
+							// event.target.style.background = "pink";
+							if (me.out) me.out(event);
+						}
+						if (curDiff < prevDiff) {
+							// The distance between the two pointers has decreased
+							// event.target.style.background = "lightblue";
+							if (me.in) me.in(event);
+						}
+					}
+
+					// Cache the distance for the next move event 
+					prevDiff = curDiff;
+				}
+			};
+			el.onpointerup = function (event) {
+				if (eventCache.length == 2) {
+					event.preventDefault();
+					event.stopPropagation();
+				}
+				// Remove this pointer from the cache and reset the target's
+				// background and border
+				remove_event(event);
+				// event.target.style.background = "white";
+
+				// If the number of pointers down is less than two then reset diff tracker
+				if (eventCache.length < 2) {
+					prevDiff = -1;
+				}
+			};
+			function remove_event(ev) {
+				// Remove this event from the target's cache
+				for (var i = 0; i < eventCache.length; i++) {
+					if (eventCache[i].pointerId == ev.pointerId) {
+						eventCache.splice(i, 1);
+						break;
+					}
+				}
+			}
+			// el.onpointercancel
+			// el.onpointerout
+			// el.onpointerleave
+		}
+
+
+		paper.install(window);
+
+		// DOM-Ready
+		$(function () {
+			['move', 'pencil'].forEach(function (iconname) {
+				$.ajax({
+					url: '../ionicons5/' + iconname + '.svg',
+					type: 'GET'
+				}).done(function (data) {
+					var svg = data.lastChild;
+					$('.icon.' + iconname).html(svg);
+				});
+			});
+			var element = $(this);
+			paper.setup('canvas-1');
+			initializePaper();
+
+			var pinch = new PinchHook(element[0]);
+			pinch.out = function (event) {
+				if (paper.view.zoom < 5) paper.view.zoom += .025;
+			};
+			pinch.in = function (event) {
+				if (paper.view.zoom > .2) paper.view.zoom -= .025;
+			};
+
+			var metakey = false;
+			var pentool = new Tool();
+			pentool.onMouseDown = function (event) {
+				redos = [];
+				// if (event.event.metaKey || event.event.altKey) {
+				// 	metakey = true;
+				// 	return;
+				// } else {
+				// 	metakey = false;
+				// }
+
+				// if (path) path.selected = false;
+
+				path = new Path({
+					segments: [event.point],
+					strokeColor: color,
+					strokeWidth: width,
+					fullySelected: true
+				});
+
+				draws.push({
+					time: new Date().getTime(),
+					type: 'Path',
+					data: path
+				});
+			};
+			pentool.onMouseDrag = function (event) {
+				if (metakey) {
+					var delta = event.downPoint.subtract(event.point);
+					paper.view.scrollBy(delta);
+					return;
+				}
+
+				path.add(event.point);
+
+				// textItem.content = 'Segment count: ' + path.segments.length;
+			};
+			pentool.onMouseUp = function (event) {
+				if (metakey) return;
+
+				var segmentCount = path.segments.length;
+				path.simplify(10);
+				// path.selected = true;
+				path.selected = false;
+				var newSegmentCount = path.segments.length;
+
+				var difference = segmentCount - newSegmentCount;
+				var percentage = 100 - Math.round(newSegmentCount / segmentCount * 100);
+
+				// textItem.content = difference + ' of the ' + segmentCount + ' segments were removed. Saving ' + percentage + '%';
+
+				/*
+				var json = path.exportJSON();
+				var cloned = new Path();
+				cloned.importJSON(json);
+				cloned.strokeColor = 'blue';
+				cloned.position.x += 100;
+				cloned.selected = false;
+				*/
+			};
+
+			var textpos;
+			var texttool = new Tool();
+			texttool.onMouseUp = function (event) {
+				redos = [];
+				textpos = event.point;
+				backdropArea.css('display', 'block');
+				inputtextArea.css('display', 'block');
+				inputtextArea.css('left', textpos.x + 'px');
+				inputtextArea.css('top', (textpos.y - getFontSize()) + 'px');
+				inputtextBox.focus();
+			};
+
+			var rect;
+			var recttool = new Tool();
+			recttool.onMouseDown = function (event) {
+				redos = [];
+				var pos = new paper.Point(event.point.x, event.point.y);
+				var size = new paper.Size(1, 1);
+				rect = new paper.Shape.Rectangle(pos, size);
+				rect.strokeColor = color;
+				draws.push({
+					time: new Date().getTime(),
+					type: 'Rect',
+					data: rect
+				});
+			};
+			recttool.onMouseDrag = function (event) {
+				var width = event.point.x - rect.bounds.x;
+				var height = event.point.y - rect.bounds.y;
+				var x = rect.bounds.x + width / 2;
+				var y = rect.bounds.y + height / 2;
+				rect.size = new paper.Size(width, height);
+				rect.position = new paper.Point(x, y);
+				rect.strokeColor = color;
+			};
+			recttool.onMouseUp = function (event) {
+				// rect.selected = true;
+			};
+
+			var linetool = new Tool();
+			linetool.onMouseDown = function (event) {
+				redos = [];
+
+				path = new Path({
+					segments: [event.point, event.point],
+					strokeColor: color,
+					strokeWidth: width,
+					fullySelected: true
+				});
+
+				draws.push({
+					time: new Date().getTime(),
+					type: 'Line',
+					data: path
+				});
+			};
+			linetool.onMouseDrag = function (event) {
+				path.lastSegment.point.x = event.point.x;
+				path.lastSegment.point.y = event.point.y;
+			};
+			linetool.onMouseUp = function (event) {
+				path.selected = false;
+			};
+
+			var movetool = new Tool();
+			movetool.onMouseDrag = function (event) {
+				// path.selected = false;
+				var delta = event.downPoint.subtract(event.point);
+				paper.view.scrollBy(delta);
+			};
+
+			var sel;
+			var seltool = new Tool();
+			seltool.onMouseDown = function (event) {
+				event.stopPropagation();
+				if (sel) {
+					var item = sel.data;
+					// item.$x = item.position.x;
+					// item.$y = item.position.y;
+					item.$x = item.bounds.left;
+					item.$y = item.bounds.top;
+					item.$width = item.bounds.width;
+					item.$height = item.bounds.height;
+					if (['Rast', 'Rect', 'Line'].indexOf(sel.type) > -1) {
+						item.$corner = isCorner(event.point, item.bounds);
+					}
+					console.log(sel.type);
+				}
+				if (sel && !item.$corner) {
+					var p = event.point;
+					var r = item.bounds;
+					if (r.left < p.x && p.x < r.right && r.top < p.y && p.y < r.bottom) {
+						// ignore
+					} else {
+						sel = null;
+					}
+				}
+
+				function isCorner(p, b) {
+					var buf = 10;
+					if (inRect(p, b.topLeft, buf)) {
+						return 1;
+					} else if (inRect(p, b.topRight, buf)) {
+						return 2;
+					} else if (inRect(p, b.bottomRight, buf)) {
+						return 3;
+					} else if (inRect(p, b.bottomLeft, buf)) {
+						return 4;
+					}
+					return 0;
+				}
+
+				function inRect(p, q, buf) {
+					return (q.x - buf < p.x && p.x < q.x + buf && q.y - buf < p.y && p.y < q.y + buf);
+				}
+			};
+			seltool.onMouseDrag = function (event) {
+				event.stopPropagation();
+				if (sel) {
+					var delta = event.point.subtract(event.downPoint);
+					var item = sel.data;
+					item.$move = true;
+					var x, y, w, h;
+					if (item.$corner === 3) {
+						x = item.$x;
+						y = item.$y;
+						w = item.$width + delta.x;
+						h = item.$height + delta.y;
+					} else if (item.$corner === 1) {
+						x = item.$x + delta.x;
+						y = item.$y + delta.y;
+						w = item.$width - delta.x;
+						h = item.$height - delta.y;
+					} else if (item.$corner === 2) {
+						x = item.$x;
+						y = item.$y + delta.y;
+						w = item.$width + delta.x;
+						h = item.$height - delta.y;
+					} else if (item.$corner === 4) {
+						x = item.$x + delta.x;
+						y = item.$y;
+						w = item.$width - delta.x;
+						h = item.$height + delta.y;
+					} else {
+						x = item.$x + delta.x;
+						y = item.$y + delta.y;
+						w = item.$width;
+						h = item.$height;
+					}
+					if (w < 1) w = 1;
+					if (h < 1) h = 1;
+					if (['Rast'].indexOf(sel.type) > -1) {
+						w = w < h ? h : w;
+						h = w;
+					}
+					item.bounds.set(x, y, w, h);
+					return;
+				}
+				// path.selected = false;
+				var delta = event.downPoint.subtract(event.point);
+				paper.view.scrollBy(delta);
+			};
+			seltool.onMouseUp = function (event) {
+				event.stopPropagation();
+				if (sel) {
+					var item = sel.data;
+					delete item.$x;
+					delete item.$y;
+					delete item.$corner;
+					if (item.$move) {
+						delete item.$move;
+						return;
+					}
+					sel = null;
+				}
+				draws.reverse().forEach(function (draw) {
+					var item = draw.data;
+					item.selected = false;
+
+					var p = event.downPoint;
+					var r = item.bounds;
+					if (sel) {
+						// ignore
+					} else if (r.left < p.x && p.x < r.right && r.top < p.y && p.y < r.bottom) {
+						sel = draw;
+					}
+				});
+				if (sel) {
+					var item = sel.data;
+					item.selected = true;
+				}
+			};
+
+			// window.addEventListener('keypress', function (event) {
+			// 	if (event.key === 'z') {
+			// 		undoDraw();
+			// 	} else if (event.key === 'y') {
+			// 		redoDraw();
+			// 	}
+			// });
+
+			var canvas = $('#canvas-1', element).orNull();
+			canvas[0].onwheel = function (event) {
+				// paper.view.center = new paper.Point(0, 0);
+				var newZoom = 1;
+				if (event.deltaY < 0) {
+					newZoom = paper.view.zoom + .1;
+				} else {
+					newZoom = paper.view.zoom - .1;
+				}
+				if (newZoom > 5) newZoom = 5;
+				if (newZoom < .2) newZoom = .2;
+				paper.view.zoom = newZoom;
+
+				// zoom(event.deltaY, event)
+			};
+
+			var inputtextBox = $('.inputtext input', element).orNull();
+			inputtextBox.css('height', getFontSize() + 4);
+			inputtextBox.css('font-size', getFontSize());
+			inputtextBox.on('keypress', function(event) {
+				event.stopPropagation();
+				if (event.key !== 'Enter') return;
+				backdropArea.css('display', 'none');
+				inputtextArea.css('display', 'none');
+
+				var textItem = new paper.PointText({
+					content: $(this).val(),
+					point: textpos,
+					fontSize: getFontSize(),
+					fillColor: color,
+				});
+				draws.push({
+					time: new Date().getTime(),
+					type: 'Text',
+					data: textItem
+				});
+				$(this).val('');
+			});
+
+			var inputtextArea = $('.inputtext', element).orNull();
+			inputtextArea.click(function (event) {
+				event.stopPropagation();
+				event.preventDefault();
+			});
+
+			var dropAction = {
+				method: '',
+				callback: function () {}
+			};
+
+			var dropfileArea = $('.dropfile', element).orNull();
+			dropfileArea.on('dragenter', function (event) {
+				event.stopPropagation();
+				event.preventDefault();
+			});
+			dropfileArea.on('dragover', function (event) {
+				event.stopPropagation();
+				event.preventDefault();
+			});
+			dropfileArea.on('drop', function (event) {
+				event.preventDefault();
+				var files = event.originalEvent.dataTransfer.files;
+				if (!files) return;
+				var file = files[0];
+				if (!file) return;
+
+				var reader = new FileReader();
+				reader.onload = function (event) {
+					backdropArea.css('display', 'none');
+					dropfileArea.css('display', 'none');
+
+					dropAction.callback(event);
+				};
+				reader[dropAction.method](file);
+			});
+
+			var fileInput = $('.selectfile', element).orNull();
+			fileInput.change(function (event) {
+				var files = event.target.files;
+				if (!files) return;
+				var file = files[0];
+				if (!file) return;
+
+				var reader = new FileReader();
+				reader.onload = function (event) {
+					backdropArea.css('display', 'none');
+					dropfileArea.css('display', 'none');
+
+					dropAction.callback(event);
+				};
+				reader[dropAction.method](file);
+			});
+
+			var backdropArea = $('.backdrop', element).orNull();
+			backdropArea.click(function () {
+				backdropArea.css('display', 'none');
+				dropfileArea.css('display', 'none');
+				inputtextArea.css('display', 'none');
+			});
+
+			var widthButton = $('.button.width', element).orNull();
+			widthButton.click(function () {
+				var idx = widths.indexOf(width) + 1;
+				if (idx >= widths.length) idx = 0;
+				width = widths[idx];
+				$(this).html('' + width);
+				inputtextBox.css('height', getFontSize() + 4);
+				inputtextBox.css('font-size', getFontSize());
+			});
+
+			var toolButtons = [];
+
+			var penButton = $('.button.pen', element).orNull();
+			toolButtons.push(penButton);
+			penButton.click(function () {
+				pentool.activate();
+				toolButtons.forEach(function (button) {
+					button.removeClass('active');
+				});
+				$(this).addClass('active');
+			});
+
+			var textButton = $('.button.text', element).orNull();
+			toolButtons.push(textButton);
+			textButton.click(function () {
+				texttool.activate();
+				toolButtons.forEach(function (button) {
+					button.removeClass('active');
+				});
+				$(this).addClass('active');
+			});
+
+			var rectButton = $('.button.rect', element).orNull();
+			toolButtons.push(rectButton);
+			rectButton.click(function () {
+				recttool.activate();
+				toolButtons.forEach(function (button) {
+					button.removeClass('active');
+				});
+				$(this).addClass('active');
+			});
+
+			var lineButton = $('.button.line', element).orNull();
+			toolButtons.push(lineButton);
+			lineButton.click(function () {
+				linetool.activate();
+				toolButtons.forEach(function (button) {
+					button.removeClass('active');
+				});
+				$(this).addClass('active');
+			});
+
+			var moveButton = $('.button.move', element).orNull();
+			toolButtons.push(moveButton);
+			moveButton.click(function () {
+				movetool.activate();
+				toolButtons.forEach(function (button) {
+					button.removeClass('active');
+				});
+				$(this).addClass('active');
+			});
+
+			var selButton = $('.button.sel', element).orNull();
+			toolButtons.push(selButton);
+			selButton.click(function () {
+				seltool.activate();
+				toolButtons.forEach(function (button) {
+					button.removeClass('active');
+				});
+				$(this).addClass('active');
+			});
+
+			var colorButton = $('.button.color', element).orNull();
+			colorButton.click(function () {
+				var idx = colors.indexOf(color) + 1;
+				if (idx >= colors.length) idx = 0;
+				color = colors[idx];
+				$(this).css('color', color);
+			});
+
+			var clrButton = $('.button.clr', element).orNull();
+			clrButton.click(function () {
+				initializePaper();
+			});
+
+			var expButton = $('.button.exp', element).orNull();
+			expButton.click(function () {
+				var contents = JSON.stringify(exportDraws());
+				var blob = new Blob([contents], { "type": "text/json" });
+
+				if (window.navigator.msSaveBlob) {
+					window.navigator.msSaveBlob(blob, "drawdata.json");
+					window.navigator.msSaveOrOpenBlob(blob, "drawdata.json");
+				} else {
+					this.href = window.URL.createObjectURL(blob);
+				}
+			});
+
+			var impButton = $('.button.imp', element).orNull();
+			impButton.click(function () {
+				backdropArea.css('display', 'block');
+				dropfileArea.css('display', 'block');
+				dropAction = {
+					method: 'readAsText',
+					callback: function (event) {
+						var json = JSON.parse(event.target.result);
+						importDraws(json);
+					}
+				};
+			});
+
+			var undoButton = $('.button.undo', element).orNull();
+			undoButton.click(function () {
+				undoDraw();
+			});
+
+			var redoButton = $('.button.redo', element).orNull();
+			redoButton.click(function () {
+				redoDraw();
+			});
+
+			var prtButton = $('.button.prt', element).orNull();
+			prtButton.on('mousedown', function () {
+				if (path) path.selected = false;
+			});
+			prtButton.click(function () {
+				var dest = document.createElement("canvas");
+				dest.width = canvas[0].width;
+				dest.height = canvas[0].height;
+				var ctx = dest.getContext('2d');
+				ctx.fillStyle = "#FFF";
+				ctx.fillRect(0, 0, dest.width, dest.height);
+				ctx.drawImage(canvas[0], 0, 0);
+
+				var img = dest.toDataURL();
+				this.href = img;
+				setTimeout(function () {
+					this.href = '#';
+				});
+			});
+
+			var imgButton = $('.button.img', element).orNull();
+			imgButton.click(function () {
+				backdropArea.css('display', 'block');
+				dropfileArea.css('display', 'block');
+				dropAction = {
+					method: 'readAsDataURL',
+					callback: function (event) {
+						var bin = event.target.result;
+						var raster = new paper.Raster(bin);
+						raster.position.x = paper.view.center.x;
+						raster.position.y = paper.view.center.y;
+						raster.onLoad = function () {
+							draws.push({
+								time: new Date().getTime(),
+								type: 'Rast',
+								data: raster
+							});
+						};
+					}
+				};
+			});
+
+		});
+
+	</script>
+	<style>
+		.paperscript .buttons .button {
+			font-size: 16px;
+		}
+	</style>
+	<link rel="stylesheet" href="../fa/css/all.css">
+</head>
+
+<body class="fullscreen">
+	<article>
+		<!--<div class="paperscript bottom">
+		</div>-->
+		<div class="paperscript">
+			<div class="buttons footer">
+				<a class="button exp" href="#" download="whiteboard.json"><i class="fa fa-download"></i> export</a>
+				<a class="button imp" href="#"><i class="fa fa-upload"></i> import</a>
+				<a class="button prt" download="whiteboard.png" href="#"><i class="fa fa-print"></i> print</a>
+				<a class="button redo" href="#"><i class="fa fa-redo"></i> redo</a>
+				<a class="button undo" href="#"><i class="fa fa-undo"></i> undo</a>
+				<a class="button clr" href="#"><i class="fa fa-trash"></i> clear</a>
+			</div>
+			<div class="buttons">
+				<!--<div class="button run">Source</div>
+				<div class="explain">
+				</div>-->
+				<a class="button width" href="#" title="stroke width">1</a>
+				<a class="button color" href="#" title="stroke color"><i class="fa fa-palette"></i></a>
+				<a class="button pen active" href="#"><i class="fa fa-pen"></i> pen</a>
+				<a class="button text" href="#"><i class="fa fa-i-cursor"></i> text</a>
+				<a class="button rect" href="#"><i class="far fa-square"></i> rect</a>
+				<a class="button line" href="#"><i class="fa fa-slash"></i> line</a>
+				<a class="button img" href="#"><i class="fa fa-image"></i> image</a>
+				<a class="button sel" href="#"><i class="fa fa-mouse-pointer"></i> select</a>
+				<a class="button move" href="#"><i class="fa fa-arrows-alt"></i> move</a>
+				
+				<!--<a class="button" href="#" onclick="zoomtool.activate();">zoom</a>-->
+			</div>
+			<div class="canvas">
+				<canvas resize="true" id="canvas-1"></canvas>
+			</div>
+		</div>
+	</article>
+	<div class="backdrop"
+		style="display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(0, 0, 0, .5);">
+		<div class="dropfile"
+			style="display: none; position: absolute; top: 50px; left: 50px; right: 50px; bottom: 50px; background-color: #fff; border-radius: 10px; padding: 10px;">
+			drop file here or 
+			<input type="file" class="selectfile" accept="image/png, image/jpeg">
+		</div>
+		<div class="inputtext" style="display: none; position: absolute">
+			<input type="text" size="10" style="-webkit-appearance: none; border: 0; padding: 0;" /><button class="button">OK</button>
+		</div>
+	</div>
+</body>
+
+</html>
