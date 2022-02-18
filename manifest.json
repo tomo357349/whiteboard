@@ -1,0 +1,12 @@
+{
+	"name": "Whiteboard",
+	"short_name": "Whiteboard",
+	"start_url": "./index.html",
+	"display": "standalone",
+	"background_color": "#fff",
+	"description": "Whiteboard",
+	"icons": [
+		{ "src": "icon/icon-72.png", "sizes": "72x72", "type": "image/png"},
+		{ "src": "icon/icon-144.png", "sizes": "144x144", "type": "image/png"}
+	]
+  }

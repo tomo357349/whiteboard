@@ -11,6 +11,28 @@
 	<link rel="stylesheet" href="assets/css/style.css" />
 	<link rel="icon" href="assets/favicon.ico" type="image/x-icon" />
 	<link rel="shortcut icon" href="assets/favicon.ico" />
+	<script>
+		if ('serviceWorker' in navigator) {
+			navigator.serviceWorker.getRegistrations().then(function (regs) {
+				regs.forEach(function (reg) {
+					var sw = reg.installing || reg.waiting || reg.active;
+					console.log('found registration:', sw.state, sw.scriptURL.substring(reg.scope.length));
+					// console.log(reg);
+					// reg.unregister();
+				});
+			});
+			navigator.serviceWorker.register('./sw.js', {scope: './'}).then(function (reg) {
+				var sw = reg.installing || reg.waiting || reg.active;
+				console.log('register:', sw.state, sw.scriptURL.substring(reg.scope.length));
+				// reg.onupdatefound = function () {
+				// 	registration.update();
+				// };
+			    sw.postMessage({ milliseconds: Date.now() });
+			}).catch(function (err) {
+				console.error(err);
+			});
+		};
+	</script>
 	<script src="assets/js/jquery.js"></script>
 	<script src="assets/js/paper.js"></script>
 	<title>Whiteboard</title>
@@ -810,7 +832,7 @@
 			<input type="file" class="selectfile" accept="image/png, image/jpeg">
 		</div>
 		<div class="inputtext" style="display: none; position: absolute">
-			<input type="text" size="10" style="-webkit-appearance: none; border: 0; padding: 0;" /><button class="button">OK</button>
+			<input type="text" size="10" style="-webkit-appearance: none; border: 0; padding: 0;" /><!--<button class="button">OK</button>-->
 		</div>
 	</div>
 </body>
